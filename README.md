@@ -4,14 +4,16 @@ For $\epsilon \sim \mathcal{N}(0, \Sigma(\phi))$ a realization of a Gaussian CMB
 
 For now, we only focus on the cosmological parameters $\phi = (H_0, \omega_b)$ and consider the following prior distribution:
 $$
-\begin{align*}
+\begin{align}
 & p(H_0) \sim \mathcal{U}(50, 90), \\
 & p(\omega_b) \sim \mathcal{U}(0.0075, 0.0567).
-\end{align*}
+\end{align}
 $$
+
 
 ## Install
 
 A Python environment with a reasonably recent version of PyTorch is needed. Exotic packages have to be installed:
 
+    pip install camb
     pip install git+https://github.com/patrick-kidger/torchcubicspline.git
