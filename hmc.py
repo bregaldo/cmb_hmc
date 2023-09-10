@@ -1,3 +1,5 @@
+""" Adapted from https://github.com/modichirag/VBS/blob/main/src/pyhmc.py """
+
 import numpy as np
 import torch
 
