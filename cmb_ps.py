@@ -33,7 +33,7 @@ class MLP(nn.Module):
 
 class CMBPS(nn.Module):
 
-    def __init__(self):
+    def __init__(self, norm_phi=True):
         super().__init__()
 
         # MLP
@@ -54,13 +54,46 @@ class CMBPS(nn.Module):
         indices = np.fft.fftshift(wn_iso).diagonal()[128:] ## The value of the wavenumbers along which we have the power spectrum diagonal
         self.register_buffer("torch_indices", torch.tensor(indices))
         self.register_buffer("torch_wn_iso", torch.tensor(wn_iso, dtype=torch.float32))
+
+        # Normalization of phi
+        self.norm_phi = norm_phi
+        self.register_buffer("min_phi", torch.tensor([50, 7.5e-3]))
+        self.register_buffer("dphi", torch.tensor([40, 49.2e-3]))
     
     def forward(self, phi):
+        if self.norm_phi:
+            print(self.dphi, self.min_phi)
+            phi = phi*self.dphi + self.min_phi
         phi = (phi - torch.tensor([70, 32e-3]).to(phi.device))/torch.tensor([20,25e-3]).to(phi.device)
         torch_diagonals = self.mlp(phi) ## Shape (batch_size, 128) (128 is the number of wavenumbers along which we have the power spectrum diagonal)
-        torch_diagonals = torch_diagonals.reshape((128, -1)) ## Shape (128, batch_size) to be able to use torchcubicspline
+        if phi.ndim == 1:
+            torch_diagonals = torch_diagonals.unsqueeze(0)
+        torch_diagonals = torch.moveaxis(torch_diagonals, -1, 0) ## Shape (128, batch_size) to be able to use torchcubicspline
         spline = torchcubicspline.NaturalCubicSpline(torchcubicspline.natural_cubic_spline_coeffs(self.torch_indices, torch_diagonals))
-        return torch.exp(torch.moveaxis(spline.evaluate(self.torch_wn_iso), -1, 0))
+        return torch.exp(torch.moveaxis(spline.evaluate(self.torch_wn_iso), -1, 0)) / 12661 # 12661 is the mean PS at fiducial cosmology
+    
+def normalize_phi(phi):
+    """ Normalize phi from [50, 90]x[0.0075, 0.0567] to [0, 1]x[0, 1]"""
+    min_phi = torch.tensor([50, 7.5e-3]).to(phi.device)
+    dphi = torch.tensor([40, 49.2e-3]).to(phi.device)
+    return (phi - min_phi) / dphi
+
+def unnormalize_phi(phi):
+    """ Unnormalize phi from [0, 1]x[0, 1] to [50, 90]x[0.0075, 0.0567]"""
+    min_phi = torch.tensor([50, 7.5e-3]).to(phi.device)
+    dphi = torch.tensor([40, 49.2e-3]).to(phi.device)
+    return phi * dphi + min_phi
+
+class CMBPS_norm(CMBPS):
+    def __init__(self, norm_phi=True):
+        super().__init__()
+        self.norm_phi = norm_phi
+
+    
+    def forward(self, phi):
+        if norm_phi:
+            phi = phi * self.dphi + self.min_phi
+        return super().forward(phi)
 
 def patch_shape_and_wcs(Npix, res):
     ndegree_patch = res * Npix / 60
@@ -122,4 +155,4 @@ def get_camb_ps(phi):
     true_ps = np.fft.fftshift(true_ps)
     true_ps[1:,1:] = sym_mean((true_ps)[1:,1:]) # symmetrize the PS
 
-    return np.fft.fftshift(true_ps)
+    return np.fft.ifftshift(true_ps)
