@@ -10,6 +10,7 @@ import camb
 from pixell import enmap, utils
 
 
+
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, n_hidden_layers=1):
         super().__init__()
