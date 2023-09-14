@@ -10,7 +10,6 @@ import camb
 from pixell import enmap, utils
 
 
-
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, n_hidden_layers=1):
         super().__init__()
@@ -63,7 +62,7 @@ class CMBPS(nn.Module):
     
     def forward(self, phi):
         if self.norm_phi:
-            print(self.dphi, self.min_phi)
+            #print(self.dphi, self.min_phi)
             phi = phi*self.dphi + self.min_phi
         phi = (phi - torch.tensor([70, 32e-3]).to(phi.device))/torch.tensor([20,25e-3]).to(phi.device)
         torch_diagonals = self.mlp(phi) ## Shape (batch_size, 128) (128 is the number of wavenumbers along which we have the power spectrum diagonal)
@@ -92,7 +91,7 @@ class CMBPS_norm(CMBPS):
 
     
     def forward(self, phi):
-        if norm_phi:
+        if self.norm_phi:
             phi = phi * self.dphi + self.min_phi
         return super().forward(phi)
 
