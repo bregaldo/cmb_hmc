@@ -1,3 +1,5 @@
+""" Adapted from https://github.com/modichirag/VBS/blob/main/src/pyhmc.py """
+
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -14,8 +16,7 @@ class Sampler():
     def to_tensor(self):
         for key in self.__dict__:
             if isinstance(self.__dict__[key], list):
-                #print(key, self.__dict__[key])
-                self.__dict__[key] = torch.stack(self.__dict__[key])            
+                self.__dict__[key] = torch.stack(self.__dict__[key], dim=1)
 
     def to_list(self):
         for key in self.__dict__:
@@ -24,7 +25,7 @@ class Sampler():
 
     def appends(self, q, acc, Hs, count):
         self.i += 1
-        self.accepts.append(acc) #careful of appending tensors
+        self.accepts.append(acc)
         self.samples.append(q)
         self.Hs.append(Hs)
         self.counts.append(count)
@@ -82,16 +83,17 @@ class HMC():
 
         self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
         self.log_prob_and_grad = log_prob_and_grad
+
         if invmetric_diag is None:
             self.invmetric_diag = 1.
         else:
-            self.invmetric_diag = invmetric_diag 
-        self.metricstd = torch.tensor(self.invmetric_diag).cuda().pow(-0.5)
+            self.invmetric_diag = invmetric_diag
+        self.metricstd = self.invmetric_diag**-0.5
 
         assert not((self.grad_log_prob is None) and (self.log_prob_and_grad is None))
 
-        self.V = lambda x: self.log_prob(x) * -1.
-        self.KE = lambda p: 0.5*(p**2 * self.invmetric_diag).sum(1).reshape(-1,1) #Sum across rows
+        self.V = lambda x: -self.log_prob(x)
+        self.KE = lambda p: 0.5*(p**2 * self.invmetric_diag).sum(-1) #Sum across rows
         self.KE_g = lambda p: p * self.invmetric_diag
 
         self.leapcount = 0
@@ -104,18 +106,18 @@ class HMC():
             v_g = self.grad_log_prob(x)
         elif self.log_prob_and_grad is not None:
             v, v_g = self.log_prob_and_grad(x)
-        return v_g * -1
+        return -v_g
 
     def V_vandg(self, x):
         if self.log_prob_and_grad is not None:
             self.Vgcount += 1
             v, v_g = self.log_prob_and_grad(x)
-            return v*-1., v_g*-1
+            return -v, -v_g
         else:
             raise NotImplementedError
 
     def unit_norm_KE(self, p):
-        return 0.5 * (p**2).sum(1) #sum across rows
+        return 0.5 * (p**2).sum(-1) #sum across rows
 
     def unit_norm_KE_g(self, p):
         return p
@@ -124,11 +126,11 @@ class HMC():
         if Vq is None:
             self.Hcount += 1
             Vq = self.V(q)
-        return Vq.reshape(-1,1) + self.KE(p)
+        return Vq + self.KE(p)
 
     def leapfrog(self, q, p, N, step_size):
         self.leapcount += 1
-        q0, p0 = q.clone(), p.clone()
+        q0, p0 = q, p
         try:
             p = p - 0.5 * step_size * self.V_g(q)
             for i in range(N - 1):
@@ -144,7 +146,7 @@ class HMC():
 
     def leapfrog_Vgq(self, q, p, N, step_size, V_q=None, V_gq=None):
         self.leapcount += 1
-        q0, p0, V_q0, V_gq0 = q.clone(), p.clone(), V_q.clone(), V_gq.clone()
+        q0, p0, V_q0, V_gq0 = q, p, V_q, V_gq
         try:
             if V_gq is None:
                 p = p - 0.5 * step_size * self.V_g(q)
@@ -173,35 +175,35 @@ class HMC():
         H0 = self.H(q0, p0, V_q0)
         H1 = self.H(q1, p1, V_q1)
         prob = torch.exp(H0 - H1)
-       
-        qq = torch.empty_like(q0)
-        pp = torch.empty_like(p0)
-        acc = torch.empty_like(prob)
+
         if u is None:
-            u = torch.rand(prob.shape[0])
+            u = torch.rand(prob.shape[0], device=prob.device)
+
+        qq = q1.clone()
+        pp = p1.clone()
+        acc = torch.ones_like(prob)
+
+        cond1 = torch.logical_or(torch.isnan(prob), torch.isinf(prob))
+        cond1 = torch.logical_or(cond1, torch.sum(q0 - q1, dim=-1) == 0)
+
+        qq[cond1] = q0[cond1]
+        pp[cond1] = p0[cond1]
+        acc[cond1] = -1.0
+
+        cond2 = torch.logical_and(u > torch.min(torch.ones_like(u), prob), ~cond1)
+        qq[cond2] = q0[cond2]
+        pp[cond2] = p0[cond2]
+        acc[cond2] = 0.0
         
-        for i in range(u.shape[0]):
-            if torch.isnan(prob[i]) or torch.isinf(prob[i]) or torch.sum(q0[i] - q1[i]) == 0:
-                qq[i] = q0[i]
-                pp[i] = p0[i]
-                acc[i] = -1.0
-            elif u[i] > min(1, prob[i]):
-                qq[i] = q0[i]
-                pp[i] = p0[i]
-                acc[i] = 0.0
-            else:
-                qq[i] = q1[i]
-                pp[i] = p1[i]
-                acc[i] = 1.0
-        return qq, pp, acc, [H0, H1]
+        return qq, pp, acc, torch.stack([H0, H1], dim=-1)
 
     def step(self, q, nleap, step_size, **kwargs):
 
         self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
-        p = torch.normal(mean=torch.zeros(q.size()).cuda(), std=self.metricstd).cuda()
+        p = torch.randn(q.shape, device=q.device) * self.metricstd
         q1, p1 = self.leapfrog(q, p, nleap, step_size)
         q, p, accepted, Hs = self.metropolis([q, p], [q1, p1])
-        return q, p, accepted, Hs, [self.Hcount, self.Vgcount, self.leapcount]
+        return q, p, accepted, Hs, torch.tensor([self.Hcount, self.Vgcount, self.leapcount])
 
     def _parse_kwargs_sample(self, **kwargs):
 
@@ -221,8 +223,8 @@ class HMC():
             prob = torch.exp(Hs[0] - Hs[1])
 
             if i < epsadapt:
-                if torch.isnan(prob): prob = torch.tensor(0.)
-                if prob > 1: prob = torch.tensor(1.)
+                prob[torch.isnan(prob)] = 0.
+                prob[prob > 1] = 1.
                 step_size, avgstepsize = epsadapt_kernel.update(prob)
             elif i == epsadapt:
                 _, step_size = epsadapt_kernel.update(prob)
@@ -231,6 +233,9 @@ class HMC():
         return q
     
     def sample(self, q, p=None, callback=None, skipburn=True, epsadapt=0, **kwargs):
+
+        if q.ndim == 1: q = q.unsqueeze(0) # If one chain only, still need 2D tensor
+        assert q.ndim == 2, "q must be 2D"
 
         kw = kwargs
         self._parse_kwargs_sample(**kwargs)
@@ -242,12 +247,11 @@ class HMC():
         for i in tqdm(range(self.nsamples + self.burnin)):
             q, p, acc, Hs, count = self.step(q, self.nleap, self.step_size)
             state.i += 1
-            state.accepts.append(torch.tensor(acc))
-            if skipburn & (i > self.burnin):
+            state.accepts.append(acc)
+            if skipburn & (i >= self.burnin):
                 state.samples.append(q)
-                state.Hs.append(torch.tensor([item for sublist in Hs for item in sublist]))
-                state.counts.append(torch.tensor(count))
+                state.Hs.append(Hs)
+                state.counts.append(count)
                 if callback is not None: callback(state)
         state.to_tensor()
         return state
-
