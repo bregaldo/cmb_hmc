@@ -16,7 +16,8 @@ class Sampler():
     def to_tensor(self):
         for key in self.__dict__:
             if isinstance(self.__dict__[key], list):
-                self.__dict__[key] = torch.stack(self.__dict__[key], dim=1)
+                dim_per_key = {'samples': -2, 'accepts': -1, 'Hs': -2, 'counts': -2}
+                self.__dict__[key] = torch.stack(self.__dict__[key], dim=dim_per_key[key])
 
     def to_list(self):
         for key in self.__dict__:
@@ -46,8 +47,8 @@ class DualAveragingStepSize():
         self.nadapt = nadapt
         
     def update(self, p_accept):
-        if torch.isnan(p_accept): p_accept = 0.
-        if p_accept > 1: p_accept = 1.
+        p_accept[p_accept > 1] = 1.
+        p_accept[torch.isnan(p_accept)] = 0.
         # Running tally of absolute error. Can be positive or negative. Want to be 0.
         self.error_sum += self.target_accept - p_accept
         # This is the next proposed (log) step size. Note it is biased towards mu.
@@ -60,7 +61,7 @@ class DualAveragingStepSize():
         self.t += 1
 
         # Return both the noisy step size, and the smoothed step size
-        return np.exp(log_step), np.exp(self.log_averaged_step)
+        return torch.exp(log_step), torch.exp(self.log_averaged_step)
 
     
     def __call__(self, i, p_accept):
@@ -72,17 +73,27 @@ class DualAveragingStepSize():
             _, step_size = self.update(p_accept)
             print("\nStep size fixed to : %0.3e\n" % step_size)
         else:
-            step_size = np.exp(self.log_averaged_step)
+            step_size = torch.exp(self.log_averaged_step)
         return step_size
     
 
 
 class HMC():
 
-    def __init__(self, log_prob, grad_log_prob=None, log_prob_and_grad=None, invmetric_diag=None):
+    def __init__(self, log_prob, grad_log_prob=None, log_prob_and_grad=None, invmetric_diag=None, precision=torch.float32):
+
+        self.precision = precision
 
         self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
         self.log_prob_and_grad = log_prob_and_grad
+
+        # Convert to precision
+        if self.log_prob is not None:
+            self.log_prob = lambda x: log_prob(x).to(self.precision)
+        if self.grad_log_prob is not None:
+            self.grad_log_prob = lambda x: grad_log_prob(x).to(self.precision)
+        if self.log_prob_and_grad is not None:
+            self.log_prob_and_grad = lambda x: tuple([y.to(self.precision) for y in log_prob_and_grad(x)])
 
         if invmetric_diag is None:
             self.invmetric_diag = 1.
@@ -200,7 +211,7 @@ class HMC():
     def step(self, q, nleap, step_size, **kwargs):
 
         self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
-        p = torch.randn(q.shape, device=q.device) * self.metricstd
+        p = torch.randn(q.shape, device=q.device, dtype=self.precision) * self.metricstd
         q1, p1 = self.leapfrog(q, p, nleap, step_size)
         q, p, accepted, Hs = self.metropolis([q, p], [q1, p1])
         return q, p, accepted, Hs, torch.tensor([self.Hcount, self.Vgcount, self.leapcount])
@@ -233,9 +244,10 @@ class HMC():
         return q
     
     def sample(self, q, p=None, callback=None, skipburn=True, epsadapt=0, **kwargs):
-
-        if q.ndim == 1: q = q.unsqueeze(0) # If one chain only, still need 2D tensor
+        if q.ndim == 1: q = q.unsqueeze(0) # Q must be at least 2D
         assert q.ndim == 2, "q must be 2D"
+
+        q = q.to(self.precision)
 
         kw = kwargs
         self._parse_kwargs_sample(**kwargs)

@@ -7,7 +7,7 @@ $$p(H_0) \sim \mathcal{U}(50, 90),\text{ and } p(\omega_b) \sim \mathcal{U}(0.00
 
 ## Install
 
-A Python environment with a reasonably recent version of PyTorch is needed. Exotic packages have to be installed:
+A Python environment with a reasonably recent version of PyTorch is needed. Additional packages have to be installed:
 
-    pip install camb
+    pip install camb arviz
     pip install git+https://github.com/patrick-kidger/torchcubicspline.git
