@@ -260,7 +260,7 @@ class HMC():
             q, p, acc, Hs, count = self.step(q, self.nleap, self.step_size)
             state.i += 1
             state.accepts.append(acc)
-            if skipburn & (i >= self.burnin):
+            if (skipburn and (i >= self.burnin)) or not skipburn:
                 state.samples.append(q)
                 state.Hs.append(Hs)
                 state.counts.append(count)
