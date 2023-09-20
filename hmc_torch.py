@@ -42,8 +42,8 @@ class DualAveragingStepSize():
         self.gamma = gamma
         self.t = t0
         self.kappa = kappa
-        self.error_sum = torch.zeros_like(self.initial_step_size).cuda() #0
-        self.log_averaged_step = torch.zeros_like(self.initial_step_size).cuda() #0
+        self.error_sum = torch.zeros_like(self.initial_step_size).to(initial_step_size.device) #0
+        self.log_averaged_step = torch.zeros_like(self.initial_step_size).to(initial_step_size.device) #0
         self.nadapt = nadapt
         
     def update(self, p_accept):
@@ -117,7 +117,7 @@ class HMC():
             v_g = self.grad_log_prob(x)
         elif self.log_prob_and_grad is not None:
             v, v_g = self.log_prob_and_grad(x)
-        return -v_g
+        return -v_g.detach()
 
     def V_vandg(self, x):
         if self.log_prob_and_grad is not None:
@@ -149,7 +149,7 @@ class HMC():
                 q = q + s * self.KE_g(p)
                 p = p - s * self.V_g(q)
             q = q + s * self.KE_g(p)
-            p = p + 0.5 * s * self.V_g(q)
+            p = p - 0.5 * s * self.V_g(q)
             return q, p
 
         except Exception as e:
@@ -180,10 +180,8 @@ class HMC():
             print("exception : ", e)
             return q0, p0, V_q0, V_gq0
         
-    def metropolis(self, qp0, qp1, V_q0=None, V_q1=None, u=None):
+    def metropolis(self, q0, p0, q1, p1, V_q0=None, V_q1=None, u=None):
         
-        q0, p0 = qp0
-        q1, p1 = qp1
         H0 = self.H(q0, p0, V_q0)
         H1 = self.H(q1, p1, V_q1)
         prob = torch.exp(H0 - H1)
@@ -214,7 +212,7 @@ class HMC():
         self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
         p = torch.randn(q.shape, device=q.device, dtype=self.precision) * self.metricstd
         q1, p1 = self.leapfrog(q, p, nleap, step_size)
-        q, p, accepted, Hs = self.metropolis([q, p], [q1, p1])
+        q, p, accepted, Hs = self.metropolis(q, p, q1, p1)
         return q, p, accepted, Hs, torch.tensor([self.Hcount, self.Vgcount, self.leapcount])
 
     def adapt_stepsize(self, q, step_size, epsadapt, nleap):
@@ -240,7 +238,7 @@ class HMC():
 
         q = q.to(self.precision)
         
-        step_size = step_size * torch.ones((q.shape[0]), device=q.device, dtype=self.precision,requires_grad=True)
+        step_size = step_size * torch.ones((q.shape[0]), device=q.device, dtype=self.precision,requires_grad=False)
         state = Sampler()
         if epsadapt>0:
             q, step_size = self.adapt_stepsize(q, step_size, epsadapt, nleap)
