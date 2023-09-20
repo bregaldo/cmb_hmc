@@ -53,16 +53,10 @@ def infer(x, ps_model, nchains=20, nsamples=200, burnin=20, step_size=0.001, nle
         phi.requires_grad_(True)
         log_prob = log_posterior(phi, x, ps_model)
         grad_log_prob = torch.autograd.grad(log_prob, phi, grad_outputs=torch.ones_like(log_prob))[0]
-        phi.requires_grad_(False)
+        #phi.requires_grad_(False)
         return log_prob.detach(), grad_log_prob
-    
     hmc = HMC(log_prob, log_prob_and_grad=log_prob_grad)
 
-    kwargs = {'nsamples': nsamples,
-            'burnin': burnin,
-            'step_size': step_size,
-            'nleap': nleap,
-            'epsadapt': epsadapt}
 
     phi_0 = sample_prior(nchains, device=device)
-    return hmc.sample(phi_0, **kwargs)
+    return hmc.sample(phi_0, nsamples=nsamples, burnin=burnin,step_size=step_size, nleap=nleap, epsadapt=epsadapt)

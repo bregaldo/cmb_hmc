@@ -37,13 +37,14 @@ class Sampler():
 class DualAveragingStepSize():
     def __init__(self, initial_step_size, target_accept=0.65, gamma=0.05, t0=10.0, kappa=0.75, nadapt=0):
         self.initial_step_size = initial_step_size 
-        self.mu = np.log(10 * initial_step_size)  # proposals are biased upwards to stay away from 0.
+        self.mu = torch.log(10 * initial_step_size)  # proposals are biased upwards to stay away from 0.
+        #print('mu shape',self.mu.shape)
         self.target_accept = target_accept
         self.gamma = gamma
         self.t = t0
         self.kappa = kappa
-        self.error_sum = 0
-        self.log_averaged_step = 0
+        self.error_sum = torch.zeros_like(self.initial_step_size).cuda() #0
+        self.log_averaged_step = torch.zeros_like(self.initial_step_size).cuda() #0
         self.nadapt = nadapt
         
     def update(self, p_accept):
@@ -114,10 +115,12 @@ class HMC():
     def V_g(self, x):
         self.Vgcount += 1
         if self.grad_log_prob is not None:
+            #print('V_g self.grad_log_prob is not None')
             v_g = self.grad_log_prob(x)
         elif self.log_prob_and_grad is not None:
+            #print('V_g self.log_prob_and_grad is not None')
             v, v_g = self.log_prob_and_grad(x)
-        return -v_g
+        return -v_g.cuda()
 
     def V_vandg(self, x):
         if self.log_prob_and_grad is not None:
@@ -142,13 +145,14 @@ class HMC():
     def leapfrog(self, q, p, N, step_size):
         self.leapcount += 1
         q0, p0 = q, p
+        s = step_size.unsqueeze(-1)
         try:
-            p = p - 0.5 * step_size * self.V_g(q)
+            p = p - 0.5 * s * self.V_g(q)
             for i in range(N - 1):
-                q = q + step_size * self.KE_g(p)
-                p = p - step_size * self.V_g(q)
-            q = q + step_size * self.KE_g(p)
-            p = p - 0.5 * step_size * self.V_g(q)
+                q = q + s * self.KE_g(p)
+                p = p - s * self.V_g(q)
+            q = q + s * self.KE_g(p)
+            p = p + 0.5 * s * self.V_g(q)
             return q, p
 
         except Exception as e:
@@ -208,7 +212,7 @@ class HMC():
         
         return qq, pp, acc, torch.stack([H0, H1], dim=-1)
 
-    def step(self, q, nleap, step_size, **kwargs):
+    def step(self, q, nleap, step_size):
 
         self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
         p = torch.randn(q.shape, device=q.device, dtype=self.precision) * self.metricstd
@@ -216,22 +220,13 @@ class HMC():
         q, p, accepted, Hs = self.metropolis([q, p], [q1, p1])
         return q, p, accepted, Hs, torch.tensor([self.Hcount, self.Vgcount, self.leapcount])
 
-    def _parse_kwargs_sample(self, **kwargs):
-
-        self.nsamples = kwargs['nsamples']
-        self.burnin = kwargs['burnin']
-        self.step_size = kwargs['step_size']
-        self.nleap = kwargs['nleap']
-
-    def adapt_stepsize(self, q, epsadapt, **kwargs):
+    def adapt_stepsize(self, q, step_size, epsadapt, nleap):
         print("Adapting step size for %d iterations" % epsadapt)
-        step_size = self.step_size
         epsadapt_kernel = DualAveragingStepSize(step_size)
-        self._parse_kwargs_sample(**kwargs)
 
-        for i in range(epsadapt + 1):
-            q, p, acc, Hs, count = self.step(q, self.nleap, step_size)
-            prob = torch.exp(Hs[0] - Hs[1])
+        for i in tqdm(range(epsadapt + 1)):
+            q, p, acc, Hs, count = self.step(q, nleap, step_size)
+            prob = torch.exp(Hs[...,0] - Hs[...,1])
 
             if i < epsadapt:
                 prob[torch.isnan(prob)] = 0.
@@ -240,29 +235,25 @@ class HMC():
             elif i == epsadapt:
                 _, step_size = epsadapt_kernel.update(prob)
                 print("Step size fixed to : ", step_size)
-                self.step_size = step_size
-        return q
+        return q, step_size
     
-    def sample(self, q, p=None, callback=None, skipburn=True, epsadapt=0, **kwargs):
+    def sample(self, q, step_size = 0.01, nsamples=20, burnin=10, nleap=30, p=None, callback=None, skipburn=True, epsadapt=0):
         if q.ndim == 1: q = q.unsqueeze(0) # Q must be at least 2D
         assert q.ndim == 2, "q must be 2D"
 
         q = q.to(self.precision)
-
-        kw = kwargs
-        self._parse_kwargs_sample(**kwargs)
         
+        step_size = step_size * torch.ones((q.shape[0]), device=q.device, dtype=self.precision,requires_grad=True)
         state = Sampler()
-        if epsadapt:
-            q = self.adapt_stepsize(q, epsadapt, **kwargs)
-            
-        for i in tqdm(range(self.nsamples + self.burnin)):
-            q, p, acc, Hs, count = self.step(q, self.nleap, self.step_size)
+        if epsadapt>0:
+            q, step_size = self.adapt_stepsize(q, step_size, epsadapt, nleap)
+        for i in tqdm(range(nsamples + burnin)):
+            q, p, acc, Hs, count = self.step(q, nleap, step_size)
             state.i += 1
             state.accepts.append(acc)
-            if (skipburn and (i >= self.burnin)) or not skipburn:
-                state.samples.append(q)
-                state.Hs.append(Hs)
+            if (skipburn and (i >= burnin)) or not skipburn:
+                state.samples.append(q.cpu())
+                state.Hs.append(Hs.cpu())
                 state.counts.append(count)
                 if callback is not None: callback(state)
         state.to_tensor()
