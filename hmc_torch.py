@@ -38,7 +38,6 @@ class DualAveragingStepSize():
     def __init__(self, initial_step_size, target_accept=0.65, gamma=0.05, t0=10.0, kappa=0.75, nadapt=0):
         self.initial_step_size = initial_step_size 
         self.mu = torch.log(10 * initial_step_size)  # proposals are biased upwards to stay away from 0.
-        #print('mu shape',self.mu.shape)
         self.target_accept = target_accept
         self.gamma = gamma
         self.t = t0
@@ -115,12 +114,10 @@ class HMC():
     def V_g(self, x):
         self.Vgcount += 1
         if self.grad_log_prob is not None:
-            #print('V_g self.grad_log_prob is not None')
             v_g = self.grad_log_prob(x)
         elif self.log_prob_and_grad is not None:
-            #print('V_g self.log_prob_and_grad is not None')
             v, v_g = self.log_prob_and_grad(x)
-        return -v_g.cuda()
+        return -v_g
 
     def V_vandg(self, x):
         if self.log_prob_and_grad is not None:
