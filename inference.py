@@ -21,14 +21,12 @@ def log_likelihood(phi, x, ps_model):
     Compute the log likelihood of the Gaussian model.
     """
     x_dim = x.shape[-1]*x.shape[-2]
-
     ps = ps_model(phi)
     xf = torch.fft.fft2(x)
 
     term_pi = -(x_dim/2) * np.log(2*np.pi)
-    term_logdet = -1/2*torch.sum(torch.log(ps), dim=(-1, -2)) # The determinant is the product of the diagonal elements of the PS
-    term_x = -1/2*torch.sum(1/ps*torch.abs(xf)**2, dim=(-1, -2))/x_dim # We divide by x_dim because of the normalization of the FFT
-
+    term_logdet = -0.5 * torch.sum(torch.log(ps), dim=(-1, -2)) # The determinant is the product of the diagonal elements of the PS
+    term_x = -0.5 * torch.sum((torch.abs(xf).pow(2)) / ps, dim=(-1, -2))/x_dim # We divide by x_dim because of the normalization of the FFT
     return term_pi + term_logdet + term_x
 
 def log_prior(phi):
@@ -53,6 +51,7 @@ def infer(x, ps_model, nchains=20, nsamples=200, burnin=20, step_size=0.001, nle
         phi.requires_grad_(True)
         log_prob = log_posterior(phi, x, ps_model)
         grad_log_prob = torch.autograd.grad(log_prob, phi, grad_outputs=torch.ones_like(log_prob))[0]
+        phi.requires_grad_(False)
         return log_prob.detach(), grad_log_prob
     hmc = HMC(log_prob, log_prob_and_grad=log_prob_grad)
 

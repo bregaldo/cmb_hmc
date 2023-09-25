@@ -37,9 +37,9 @@ class Sampler():
 class DualAveragingStepSize():
     def __init__(self, initial_step_size, target_accept=0.65, gamma=0.05, t0=10.0, kappa=0.75, nadapt=0):
         self.initial_step_size = initial_step_size 
-        self.mu = torch.log(10 * initial_step_size)  # proposals are biased upwards to stay away from 0.
+        self.mu = torch.log(initial_step_size) #torch.log(10 * initial_step_size)  # proposals are biased upwards to stay away from 0.
         self.target_accept = target_accept
-        self.gamma = gamma
+        self.gamma = gamma * 2 #parameter to tune
         self.t = t0
         self.kappa = kappa
         self.error_sum = torch.zeros_like(self.initial_step_size).to(initial_step_size.device) #0
@@ -164,7 +164,7 @@ class HMC():
                 p = p - 0.5 * step_size * self.V_g(q)
             else:
                 p = p - 0.5 * step_size * V_gq
-            for i in range(N - 1):
+            for _ in tqdm(range(N - 1)):
                 q = q + step_size * self.KE_g(p)
                 p = p - step_size * self.V_g(q)
 
@@ -219,13 +219,12 @@ class HMC():
         print("Adapting step size for %d iterations" % epsadapt)
         epsadapt_kernel = DualAveragingStepSize(step_size)
 
-        for i in tqdm(range(epsadapt + 1)):
+        for i in tqdm(range((epsadapt + 1))):
             q, p, acc, Hs, count = self.step(q, nleap, step_size)
+            q = q.detach()
             prob = torch.exp(Hs[...,0] - Hs[...,1])
 
             if i < epsadapt:
-                prob[torch.isnan(prob)] = 0.
-                prob[prob > 1] = 1.
                 step_size, avgstepsize = epsadapt_kernel.update(prob)
             elif i == epsadapt:
                 _, step_size = epsadapt_kernel.update(prob)
